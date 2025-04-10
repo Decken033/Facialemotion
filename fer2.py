@@ -78,8 +78,13 @@ def data_augmentation(x_train):
     datagen = ImageDataGenerator(
         rotation_range=20,
         horizontal_flip=True,
-        height_shift_range=shift,
-        width_shift_range=shift)
+        #增加缩放，亮度变换，剪切
+        width_shift_range=0.1,
+        height_shift_range=0.1,
+        shear_range=0.2,
+        zoom_range=0.2,
+        #brightness_range=[0.2, 1.5],
+    )
     datagen.fit(x_train)
     return datagen
 
