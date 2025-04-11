@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import os
 from tensorflow.keras.optimizers import Adam, SGD
 from tensorflow.keras.models import Sequential, model_from_json
 from tensorflow.keras.layers import Conv2D, MaxPooling2D, Dense, Flatten, Dropout, BatchNormalization, Activation
@@ -9,8 +10,10 @@ from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
 from sklearn import model_selection
 from math import ceil
+from datetime import datetime
 
-
+from tensorflow.keras.regularizers import l2  # 添加L2正则化
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau  # 添加回调函数
 
 # Loads csv files and appends pixels to X and labels to y
 def preprocess_data():
@@ -102,58 +105,75 @@ def show_augmented_images(datagen, x_train, y_train):
     plt.show()
 
 
+
 def define_model(input_shape=(48, 48, 1), classes=7):
     num_features = 64
+    # 添加L2正则化参数
+    l2_reg = 0.0001
 
     model = Sequential()
 
-    # 1st stage
-    model.add(Conv2D(num_features, kernel_size=(3, 3), input_shape=input_shape))
+    # 1st stage - 保持原来的valid padding
+    model.add(Conv2D(num_features, kernel_size=(3, 3), padding='valid', input_shape=input_shape,
+                     kernel_regularizer=l2(l2_reg)))  # 保持原来的valid padding
     model.add(BatchNormalization())
     model.add(Activation(activation='relu'))
-    model.add(Conv2D(num_features, kernel_size=(3, 3)))
+    model.add(Conv2D(num_features, kernel_size=(3, 3), padding='valid', kernel_regularizer=l2(l2_reg)))  # 保持原来的valid padding
     model.add(BatchNormalization())
     model.add(Activation(activation='relu'))
-    model.add(Dropout(0.5))
+    #model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    model.add(Dropout(0.3))
 
-    # 2nd stage
-    model.add(Conv2D(num_features, (3, 3), activation='relu'))
-    model.add(Conv2D(num_features, (3, 3), activation='relu'))
+    # 2nd stage - 保持原来的valid padding
+    model.add(Conv2D(num_features, (3, 3), padding='valid', kernel_regularizer=l2(l2_reg)))  # 保持原来的valid padding
+    model.add(BatchNormalization())
+    model.add(Activation(activation='relu'))
+    model.add(Conv2D(num_features, (3, 3), padding='valid', kernel_regularizer=l2(l2_reg)))  # 保持原来的valid padding
+    model.add(BatchNormalization())
+    model.add(Activation(activation='relu'))
     model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    model.add(Dropout(0.3))
 
-    # 3rd stage
-    model.add(Conv2D(2 * num_features, kernel_size=(3, 3)))
+    # 3rd stage - 这里开始使用same padding防止尺寸问题
+    model.add(Conv2D(2 * num_features, kernel_size=(3, 3), padding='same', kernel_regularizer=l2(l2_reg)))  # 改为same
     model.add(BatchNormalization())
     model.add(Activation(activation='relu'))
-    model.add(Conv2D(2 * num_features, kernel_size=(3, 3)))
+    model.add(Conv2D(2 * num_features, kernel_size=(3, 3), padding='same', kernel_regularizer=l2(l2_reg)))  # 改为same
     model.add(BatchNormalization())
     model.add(Activation(activation='relu'))
+    #model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    model.add(Dropout(0.3))
 
-    # 4th stage
-    model.add(Conv2D(2 * num_features, (3, 3), activation='relu'))
-    model.add(Conv2D(2 * num_features, (3, 3), activation='relu'))
+    # 4th stage - 继续使用same padding
+    model.add(Conv2D(2 * num_features, (3, 3), padding='same', kernel_regularizer=l2(l2_reg)))  # 改为same
+    model.add(BatchNormalization())
+    model.add(Activation(activation='relu'))
+    model.add(Conv2D(2 * num_features, (3, 3), padding='same', kernel_regularizer=l2(l2_reg)))  # 改为same
+    model.add(BatchNormalization())
+    model.add(Activation(activation='relu'))
     model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    model.add(Dropout(0.3))
 
-    # 5th stage
-    model.add(Conv2D(4 * num_features, kernel_size=(3, 3)))
+    # 5th stage - 继续使用same padding
+    model.add(Conv2D(4 * num_features, kernel_size=(3, 3), padding='same', kernel_regularizer=l2(l2_reg)))  # 改为same
     model.add(BatchNormalization())
     model.add(Activation(activation='relu'))
-    model.add(Conv2D(4 * num_features, kernel_size=(3, 3)))
+    model.add(Conv2D(4 * num_features, kernel_size=(3, 3), padding='same', kernel_regularizer=l2(l2_reg)))  # 改为same
     model.add(BatchNormalization())
     model.add(Activation(activation='relu'))
+    model.add(Dropout(0.4))
 
     model.add(Flatten())
 
     # Fully connected neural networks
-    model.add(Dense(1024, activation='relu'))
-    model.add(Dropout(0.2))
-    model.add(Dense(1024, activation='relu'))
-    model.add(Dropout(0.2))
+    model.add(Dense(1024, activation='relu', kernel_regularizer=l2(l2_reg)))
+    model.add(Dropout(0.5))
+    model.add(Dense(1024, activation='relu', kernel_regularizer=l2(l2_reg)))
+    model.add(Dropout(0.5))
 
     model.add(Dense(classes, activation='softmax'))
 
     return model
-
 
 def plot_acc_loss(history):
     # Plot accuracy graph
@@ -175,15 +195,21 @@ def plot_acc_loss(history):
     plt.show()
 
 
-def save_model_and_weights(model, test_acc):
-    # Serialize and save model to JSON
-    test_acc = int(test_acc * 10000)
+
+
+def save_model_and_weights(model, test_acc, save_dir='Saved-Models', model_name='cnn'):
+    os.makedirs(save_dir, exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    base_name = f'{model_name}_{timestamp}_acc_{test_acc:.4f}'
+    json_path = os.path.join(save_dir, f'{base_name}_structure.json')
+    h5_path = os.path.join(save_dir, f'{base_name}_weights.h5')
+
     model_json = model.to_json()
-    with open('Saved-Models\\model' + str(test_acc) + '.json', 'w') as json_file:
+    with open(json_path, 'w') as json_file:
         json_file.write(model_json)
-    # Serialize and save weights to JSON
-    model.save_weights('Saved-Models\\model' + str(test_acc) + '.h5')
-    print('Model and weights are saved in separate files.')
+    model.save_weights(h5_path)
+
+    print(f'Model saved to {json_path} and weights saved to {h5_path}')
 
 
 def load_model_and_weights(model_path, weights_path):
@@ -215,7 +241,7 @@ def run_model():
     datagen = data_augmentation(x_train)
 
     epochs = 100
-    batch_size = 64
+    batch_size = 32
 
     print("X_train shape: " + str(x_train.shape))
     print("Y_train shape: " + str(y_train.shape))
@@ -224,13 +250,33 @@ def run_model():
     print("X_val shape: " + str(x_val.shape))
     print("Y_val shape: " + str(y_val.shape))
 
+    # 添加回调函数
+    early_stopping = EarlyStopping(
+        monitor='val_loss',
+        patience=15,
+        verbose=1,
+        restore_best_weights=True
+    )
+
+    reduce_lr = ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.2,
+        patience=5,
+        min_lr=1e-6,
+        verbose=1
+    )
+
+
     # Training model from scratch
     model = define_model(input_shape=x_train[0].shape, classes=len(fer_classes))
     model.summary()
-    model.compile(optimizer=Adam(learning_rate=0.0001), loss='binary_crossentropy', metrics=['accuracy'])
-    history = model.fit(datagen.flow(x_train, y_train, batch_size=batch_size), epochs=epochs,
+    model.compile(optimizer=Adam(learning_rate=0.00005), loss='binary_crossentropy', metrics=['accuracy'])
+    history = model.fit(datagen.flow(x_train, y_train, batch_size=batch_size),
+                        epochs=epochs,
                         steps_per_epoch=len(x_train) // batch_size,
-                        validation_data=(x_val, y_val), verbose=2)
+                        validation_data=(x_val, y_val),
+                        callbacks=[early_stopping, reduce_lr],# 使用回调函数
+                        verbose=2)
     test_loss, test_acc = model.evaluate(x_test, y_test, batch_size=batch_size)
 
     plot_acc_loss(history)
